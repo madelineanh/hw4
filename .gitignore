@@ -1,0 +1,14 @@
+# Secrets and supplied local-only data — never commit these.
+.env
+.env.*
+!.env.example
+data/
+data (1).zip
+
+# Local tooling output.
+frontend/node_modules/
+frontend/dist/
+.venv/
+backend/.venv/
+**/__pycache__/
+.DS_Store
