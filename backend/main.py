@@ -6,7 +6,7 @@ import secrets
 import sqlite3
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 DATABASE = DATA_DIR / "campus_customs.db"
 PBKDF2_ITERATIONS = 120_000
+ACTIVE_SESSIONS: dict[str, int] = {}
 
 app = FastAPI(title="Campus Customs API")
 app.add_middleware(
@@ -99,15 +100,24 @@ def public_user(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def customer_context(user_id: int | None) -> CustomerContext | None:
+def customer_context(user_id: int | None, session_token: str | None = None) -> CustomerContext | None:
     if user_id is None:
         return None
+    if not session_token or ACTIVE_SESSIONS.get(session_token) != user_id:
+        raise HTTPException(status_code=401, detail="Please log in to access saved chat history")
     with connect() as connection:
         row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Account not found")
     user = public_user(row)
     return CustomerContext(**user)
+
+
+def session_response(row: sqlite3.Row) -> dict[str, Any]:
+    """Return a public profile plus an opaque, process-local session credential."""
+    token = secrets.token_urlsafe(32)
+    ACTIVE_SESSIONS[token] = row["id"]
+    return {"user": public_user(row), "session_token": token}
 
 
 def chat_history(user_id: int, limit: int = 40) -> list[ChatHistoryRecord]:
@@ -144,10 +154,10 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
+async def chat(request: ChatRequest, x_session_token: str | None = Header(default=None)) -> ChatResponse:
     """Send a shopper message through the Campus Concierge agent."""
     try:
-        customer = customer_context(request.user_id)
+        customer = customer_context(request.user_id, x_session_token)
         history = (
             [{"role": item.role, "content": item.content} for item in chat_history(customer.id)]
             if customer else [turn.model_dump() for turn in request.history]
@@ -171,9 +181,9 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 
 @app.get("/api/chat/history/{user_id}", response_model=ChatHistoryResponse)
-def get_chat_history(user_id: int) -> ChatHistoryResponse:
+def get_chat_history(user_id: int, x_session_token: str | None = Header(default=None)) -> ChatHistoryResponse:
     """Reload persisted conversation history for a signed-in shopper."""
-    customer_context(user_id)
+    customer_context(user_id, x_session_token)
     return ChatHistoryResponse(messages=chat_history(user_id))
 
 
@@ -195,7 +205,7 @@ def register(request: RegisterRequest) -> dict[str, Any]:
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail="An account with that email already exists")
         row = connection.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
-        return {"user": public_user(row)}
+        return session_response(row)
 
 
 @app.post("/api/auth/login")
@@ -205,7 +215,14 @@ def login(request: LoginRequest) -> dict[str, Any]:
         row = connection.execute("SELECT * FROM users WHERE lower(email) = ?", (email,)).fetchone()
     if row is None or not verify_password(request.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="Email or password is incorrect")
-    return {"user": public_user(row)}
+    return session_response(row)
+
+
+@app.post("/api/auth/logout", status_code=204)
+def logout(x_session_token: str | None = Header(default=None)) -> None:
+    """Invalidate the current in-memory session without exposing account data."""
+    if x_session_token:
+        ACTIVE_SESSIONS.pop(x_session_token, None)
 
 
 @app.get("/api/products")

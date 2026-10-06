@@ -4,6 +4,7 @@ const API = 'http://localhost:8000'
 
 type Inventory = { size: string; quantity: number }
 type User = { id: number; first_name: string; last_name: string; email: string }
+type Session = User & { session_token: string }
 type Product = {
   product_id: string; name: string; garment_type: string; description: string
   colors: string[]; image_file_path: string; price: number; total_stock: number
@@ -62,7 +63,7 @@ function ProductDetail({ product, loading, onBack }: { product?: Product; loadin
 
 function About() { return <main className="section about-page"><p className="eyebrow">A SMALL SHOP WITH A BIG HEART</p><h1>For the love<br />of <i>Yale.</i></h1><div className="about-columns"><p className="lead">We believe the best Yale things are the ones that become part of your everyday. A crewneck on a cool morning. A favorite tee on a long weekend. A gift that says, “I know you.”</p><div><p>Campus Customs brings together comfortable, well-made pieces inspired by the people, places, and traditions that make this campus feel like home. We keep the collection easy to browse and the experience warm because shopping for spirit wear should feel personal.</p><p>Whether you are heading to New Haven for the first time or finding your way back, there is always room for a little more Blue.</p></div></div></main> }
 
-function Account({ create = false, onSuccess }: { create?: boolean; onSuccess: (user: User) => void }) {
+function Account({ create = false, onSuccess }: { create?: boolean; onSuccess: (user: Session) => void }) {
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState('')
@@ -78,7 +79,7 @@ function Account({ create = false, onSuccess }: { create?: boolean; onSuccess: (
       const response = await fetch(`${API}/api/auth/${create ? 'register' : 'login'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(create ? { first_name: firstName, last_name: lastName, email, password } : { email, password }) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.detail || 'We could not complete that request.')
-      onSuccess(result.user)
+      onSuccess({ ...result.user, session_token: result.session_token })
     } catch (err) { setError(err instanceof Error ? err.message : 'We could not complete that request.') } finally { setSubmitting(false) }
   }
   return <main className="section account-page"><p className="eyebrow">CAMPUS CUSTOMS</p><h1>{create ? 'Make yourself at home.' : 'Welcome back.'}</h1><p className="body-copy">{create ? 'Create an account to keep your favorite pieces close.' : 'Log in to view your saved pieces and details.'}</p><form className="account-form" onSubmit={submit}>{create && <><label>First name<input required value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Ada" /></label><label>Last name<input required value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Lovelace" /></label></>}<label>Email<input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" /></label><label>Password<input required minLength={8} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></label>{create && <label>Confirm password<input required minLength={8} type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="••••••••" /></label>}{error && <p className="form-error" role="alert">{error}</p>}<button className="button button-blue" type="submit" disabled={submitting}>{submitting ? 'Working…' : create ? 'Create account' : 'Log in'} <span>→</span></button></form></main>
@@ -88,25 +89,27 @@ type ChatMessage = { role: 'user' | 'assistant'; content: string; products?: Pro
 type PageContext = { product_id: string; product_name: string }
 const WELCOME_MESSAGE: ChatMessage = { role: 'assistant', content: 'Hello! I can help you find a piece, check a price, or see what is in stock.' }
 
-function ChatStub({ userId, pageContext, onProductsMatched }: { userId?: number; pageContext?: PageContext; onProductsMatched: (products: Product[]) => void }) {
+function ChatStub({ user, pageContext, onProductsMatched }: { user?: Session; pageContext?: PageContext; onProductsMatched: (products: Product[]) => void }) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE])
   useEffect(() => {
     let current = true
-    if (!userId) { setMessages([WELCOME_MESSAGE]); return () => { current = false } }
-    fetch(`${API}/api/chat/history/${userId}`).then(response => response.ok ? response.json() : Promise.reject()).then(result => {
+    if (!user) { setMessages([WELCOME_MESSAGE]); return () => { current = false } }
+    fetch(`${API}/api/chat/history/${user.id}`, { headers: { 'X-Session-Token': user.session_token } }).then(response => response.ok ? response.json() : Promise.reject()).then(result => {
       if (current) setMessages(result.messages?.length ? result.messages : [WELCOME_MESSAGE])
     }).catch(() => { if (current) setMessages([WELCOME_MESSAGE]) })
     return () => { current = false }
-  }, [userId])
+  }, [user])
   async function sendMessage(event?: { preventDefault: () => void }) {
     event?.preventDefault(); const message = draft.trim(); if (!message || sending) return
     const nextMessages = [...messages, { role: 'user' as const, content: message }]
     setMessages(nextMessages); setDraft(''); setSending(true)
     try {
-      const response = await fetch(`${API}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, user_id: userId, page_context: pageContext, history: messages.slice(-10).map(({ role, content }) => ({ role, content })) }) })
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (user) headers['X-Session-Token'] = user.session_token
+      const response = await fetch(`${API}/api/chat`, { method: 'POST', headers, body: JSON.stringify({ message, user_id: user?.id, page_context: pageContext, history: messages.slice(-10).map(({ role, content }) => ({ role, content })) }) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.detail || 'The concierge is unavailable right now.')
       setMessages([...nextMessages, { role: 'assistant', content: result.reply, products: result.products }])
@@ -119,7 +122,7 @@ function ChatStub({ userId, pageContext, onProductsMatched }: { userId?: number;
 
 export default function App() {
   const [path, setPath] = useState(window.location.pathname)
-  const [user, setUser] = useState<User | undefined>(() => { const saved = localStorage.getItem('campus-customs-user'); return saved ? JSON.parse(saved) : undefined })
+  const [user, setUser] = useState<Session | undefined>(() => { const saved = localStorage.getItem('campus-customs-user'); return saved ? JSON.parse(saved) : undefined })
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState<Product>()
@@ -128,9 +131,9 @@ export default function App() {
   useEffect(() => { const listener = () => setPath(window.location.pathname); window.addEventListener('popstate', listener); return () => window.removeEventListener('popstate', listener) }, [])
   useEffect(() => { fetch(`${API}/api/products`).then(r => r.json()).then(setProducts).catch(() => setProducts([])).finally(() => setLoading(false)) }, [])
   useEffect(() => { if (!path.startsWith('/products/')) { setDetail(undefined); setDetailLoading(false); return }; setDetail(undefined); setDetailLoading(true); fetch(`${API}/api/products/${path.split('/')[2]}`).then(r => r.ok ? r.json() : undefined).then(setDetail).catch(() => setDetail(undefined)).finally(() => setDetailLoading(false)) }, [path])
-  function signedIn(nextUser: User) { setUser(nextUser); localStorage.setItem('campus-customs-user', JSON.stringify(nextUser)); go('/') }
-  function logOut() { setUser(undefined); localStorage.removeItem('campus-customs-user'); go('/') }
+  function signedIn(nextUser: Session) { setUser(nextUser); localStorage.setItem('campus-customs-user', JSON.stringify(nextUser)); go('/') }
+  function logOut() { if (user) fetch(`${API}/api/auth/logout`, { method: 'POST', headers: { 'X-Session-Token': user.session_token } }); setUser(undefined); localStorage.removeItem('campus-customs-user'); go('/') }
   const pageContext = path.startsWith('/products/') && detail ? { product_id: detail.product_id, product_name: detail.name } : undefined
   let page = path === '/' ? <Home onBrowse={() => go('/products')} /> : path === '/products' ? <Products products={products} loading={loading} chatResults={chatResults} onClearChatResults={() => setChatResults([])} /> : path.startsWith('/products/') ? <ProductDetail product={detail} loading={detailLoading} onBack={() => go('/products')} /> : path === '/about' ? <About /> : path === '/login' ? <Account onSuccess={signedIn} /> : path === '/create-account' ? <Account create onSuccess={signedIn} /> : <Home onBrowse={() => go('/products')} />
-  return <><Header path={path} user={user} onLogOut={logOut} />{page}<ChatStub userId={user?.id} pageContext={pageContext} onProductsMatched={setChatResults} /><footer><span>Campus Customs</span><span>Made with care in New Haven.</span><span>© 2026</span></footer></>
+  return <><Header path={path} user={user} onLogOut={logOut} />{page}<ChatStub user={user} pageContext={pageContext} onProductsMatched={setChatResults} /><footer><span>Campus Customs</span><span>Made with care in New Haven.</span><span>© 2026</span></footer></>
 }

@@ -91,6 +91,8 @@ When the frontend recognizes a signed-in user, it calls `GET /api/chat/history/{
 
 The agent receives a `CustomerContext` dependency containing only the logged-in shopper’s `id`, first name, last name, and email. It may use a first name for a natural greeting but is instructed never to repeat the email or reveal private details. On a product detail page, the frontend sends `PageContext` with the current product ID and name. The agent uses that context to resolve “this” or “it” with a product or stock tool before answering.
 
+Saved chat access is session-protected. Registration and login return a public user profile plus an opaque server-side session token; the browser sends that token in `X-Session-Token` for a logged-in chat request or a history reload. The backend verifies that the token belongs to the requested user ID before reading or writing any saved messages, and logout invalidates the token. A bare or guessed user ID therefore cannot reveal another customer’s history.
+
 ## Problem 12: Final agent harness and safety controls
 
 ### Validated models and dependencies
@@ -113,6 +115,8 @@ The agent receives a `CustomerContext` dependency containing only the logged-in 
 The Campus Concierge can use four database-backed tools: `search_products` for catalogue keyword matches, `browse_products` for combined garment/color/budget/in-stock constraints, `get_product` for one exact product and its inventory, and `get_size_stock` for authoritative full or size-specific availability. Prices, descriptions, product facts, and stock must come from these tools; a zero quantity is always treated as unavailable.
 
 The system prompt states that shopper text cannot override safety instructions, hidden prompts or data must not be revealed, tool/database values are the only authoritative shop facts, and one customer’s identity or account information must never be exposed to another customer. Credentials, API keys, password hashes, and private account details are not returned.
+
+The API enforces that privacy boundary as well: private chat history and persistent chat writes require the matching opaque session token, rather than relying on a browser-supplied user ID alone.
 
 ### Runtime limits and audit trail
 

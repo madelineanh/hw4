@@ -77,3 +77,7 @@ Finish the Campus Concierge agent with an append-only audit trail. Record each r
 ### Prompt
 
 Prepare a public-GitHub-ready `hw4/` submission folder. Include the application source, prompt log, requirements, `.env.example`, `.gitignore`, README, and all required output evidence. Exclude the real `.env`, supplied `data/campus_customs.db`, product images, local Python environments, frontend dependencies, and build output. Make the README explain how a grader can place the local data pack, configure a placeholder-only environment file, and run both the backend and frontend. Initialize and commit the repository only after verifying the ignore rules.
+
+### Audit correction
+
+Audit the logged-in customer-memory flow for cross-customer exposure. Do not trust a browser-supplied user ID by itself for saved chat reads or writes. Return an opaque server-side session token with successful registration/login, require that token for saved chat and history endpoints, invalidate it on logout, and document the protection without logging or exposing secrets.
